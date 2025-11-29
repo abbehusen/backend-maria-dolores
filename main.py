@@ -13,6 +13,20 @@ app = FastAPI(
     version="0.1.0",
 )
 
+origins = [
+    "http://localhost:3000",         # dev local
+    "https://seu-frontend.onrender.com",  # ajuste depois com a URL real
+    "https://app.base44.com.br",     # se você for chamar a partir de lá
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Endpoint oficial da VTEX
 MD_BASE_URL = "https://www.mariadolores.com.br/api/catalog_system/pub/products/search/"
 
@@ -405,3 +419,4 @@ def sku_image_options(
         )
 
     return opcoes
+
