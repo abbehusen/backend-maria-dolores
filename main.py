@@ -4,6 +4,7 @@ import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from urllib.parse import quote  # já comentei lá em cima, só reforçando
+from fastapi.middleware.cors import CORSMiddleware  # 👈 ADICIONE ESTA LINHA
 
 import unicodedata
 
@@ -419,4 +420,5 @@ def sku_image_options(
         )
 
     return opcoes
+
 
