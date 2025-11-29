@@ -15,7 +15,7 @@ app = FastAPI(
 
 origins = [
     "http://localhost:3000",              # dev local
-    "https://seu-frontend.onrender.com",  # ajuste depois com a URL real
+    "https://backend-maria-dolores.onrender.com/docs",  # ajuste depois com a URL real
     "https://app.base44.com.br",          # se você for chamar a partir de lá
 ]
 
