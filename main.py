@@ -7,25 +7,23 @@ from urllib.parse import quote
 from fastapi.middleware.cors import CORSMiddleware
 import unicodedata
 
+
+
 app = FastAPI(
     title="Backend Maria Dolores",
     description="Proxy para API VTEX da Maria Dolores com enriquecimento de dados",
     version="0.1.0",
 )
 
-origins = [
-    "http://localhost:3000",              # dev local
-    "https://backend-maria-dolores.onrender.com/docs",  # ajuste depois com a URL real
-    "https://app.base44.com.br",          # se você for chamar a partir de lá
-]
-
+# 🔓 CORS liberado para qualquer origem (inclui Base44, localhost, etc.)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],      # libera geral
+    allow_credentials=False,  # importante estar False para poder usar "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Endpoint oficial da VTEX
 MD_BASE_URL = "https://www.mariadolores.com.br/api/catalog_system/pub/products/search/"
