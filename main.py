@@ -3,9 +3,8 @@ from typing import Optional, List, Any, Dict
 import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
-from urllib.parse import quote  # já comentei lá em cima, só reforçando
-from fastapi.middleware.cors import CORSMiddleware  # 👈 ADICIONE ESTA LINHA
-
+from urllib.parse import quote
+from fastapi.middleware.cors import CORSMiddleware
 import unicodedata
 
 app = FastAPI(
@@ -15,9 +14,9 @@ app = FastAPI(
 )
 
 origins = [
-    "http://localhost:3000",         # dev local
+    "http://localhost:3000",              # dev local
     "https://seu-frontend.onrender.com",  # ajuste depois com a URL real
-    "https://app.base44.com.br",     # se você for chamar a partir de lá
+    "https://app.base44.com.br",          # se você for chamar a partir de lá
 ]
 
 app.add_middleware(
@@ -65,17 +64,82 @@ def escolher_melhor_imagem(item: Dict[str, Any]) -> Optional[str]:
     return imagens[0].get("imageUrl")
 
 
+def _listar_opcoes_sku_imagem(
+    produtos: List[Dict[str, Any]],
+    codigo: str,
+    banho: Optional[str],
+    pedra: Optional[str],
+) -> List[Dict[str, Any]]:
+    """
+    Função interna que aplica a MESMA lógica de filtro usada em /md/sku-image-options
+    e retorna uma lista de opções de imagem para (código, banho, pedra).
+    """
+    codigo_norm = normalizar_texto(codigo)
+    banho_norm = normalizar_texto(banho) if banho else ""
+    pedra_norm = normalizar_texto(pedra) if pedra else ""
+
+    opcoes: List[Dict[str, Any]] = []
+
+    for prod in produtos:
+        prod_ref = prod.get("productReference") or prod.get("productReferenceCode") or ""
+        prod_ref_norm = normalizar_texto(prod_ref)
+
+        # filtro básico por código (começando com MD2116, etc.)
+        if "." in codigo_norm:
+            if prod_ref_norm != codigo_norm:
+                continue
+        else:
+            if not prod_ref_norm.startswith(codigo_norm):
+                continue
+
+        pedras = prod.get("Pedras") or []
+        pedras_norm = [normalizar_texto(p) for p in pedras]
+        pedra_label = pedras[0] if pedras else None
+
+        for item in prod.get("items", []):
+            banhos = item.get("Banho") or []
+            banhos_norm = [normalizar_texto(b) for b in banhos]
+            banho_label = banhos[0] if banhos else None
+
+            # filtros "semânticos"
+            if banho_norm:
+                if not any(banho_norm in b for b in banhos_norm):
+                    continue
+
+            if pedra_norm:
+                if not any(pedra_norm in p for p in pedras_norm):
+                    continue
+
+            image_url = escolher_melhor_imagem(item)
+            if not image_url:
+                continue
+
+            opcoes.append(
+                {
+                    "codigo": prod_ref,
+                    "banho": banho_label,
+                    "pedra": pedra_label,
+                    "image_url": image_url,
+                }
+            )
+
+    return opcoes
+
+
 def escolher_sku(
     produtos: List[Dict[str, Any]],
     codigo: str,
     banho: Optional[str],
     pedra: Optional[str],
 ) -> Optional[Dict[str, Any]]:
+    """
+    ⚠ Hoje essa função não é usada em nenhum endpoint.
+      Mantive por compatibilidade, caso você esteja importando em outro lugar.
+    """
     codigo_norm = normalizar_texto(codigo)
     banho_norm = normalizar_texto(banho) if banho else ""
     pedra_norm = normalizar_texto(pedra) if pedra else ""
 
-    # 1) lista flat de SKUs
     skus = []
     for prod in produtos:
         prod_ref = prod.get("productReference") or prod.get("productReferenceCode") or ""
@@ -88,13 +152,15 @@ def escolher_sku(
             banhos = item.get("Banho") or []
             banhos_norm = [normalizar_texto(b) for b in banhos]
 
-            skus.append({
-                "produto": prod,
-                "item": item,
-                "codigo_norm": prod_ref_norm,
-                "banhos_norm": banhos_norm,
-                "pedras_norm": pedras_norm,
-            })
+            skus.append(
+                {
+                    "produto": prod,
+                    "item": item,
+                    "codigo_norm": prod_ref_norm,
+                    "banhos_norm": banhos_norm,
+                    "pedras_norm": pedras_norm,
+                }
+            )
 
     if not skus:
         return None
@@ -111,30 +177,28 @@ def escolher_sku(
     # 3) filtro por banho (se informado)
     if banho_norm:
         cand_banho = [
-            s for s in candidatos
+            s
+            for s in candidatos
             if any(banho_norm == b or banho_norm in b for b in s["banhos_norm"])
         ]
         if cand_banho:
             candidatos = cand_banho
 
-    # 4) filtro por pedra (se informada) — AGATA PRETA casa com AGATA PRETA LISTRADA
+    # 4) filtro por pedra (se informada)
     if pedra_norm:
         cand_pedra = []
         for s in candidatos:
             pedras_norm = s["pedras_norm"]
-            # match se a pedra buscada estiver contida na pedra do produto ou vice-versa
             if any(
-                pedra_norm == p
-                or pedra_norm in p
-                or p in pedra_norm
+                pedra_norm == p or pedra_norm in p or p in pedra_norm
                 for p in pedras_norm
             ):
                 cand_pedra.append(s)
         if cand_pedra:
             candidatos = cand_pedra
 
-    # 5) devolve o primeiro candidato
     return candidatos[0] if candidatos else None
+
 
 def buscar_imagem_por_codigo_pedra_banho(
     codigo: str,
@@ -145,28 +209,30 @@ def buscar_imagem_por_codigo_pedra_banho(
     Busca na VTEX pelo código e retorna a URL da imagem
     do SKU cuja combinação (código / pedra / banho) bate.
     Essa função NÃO lança HTTPException, só retorna None em caso de não encontrado.
-    """
 
-    # Aqui usamos o mesmo padrão que você já tinha:
-    # GET https://www.mariadolores.com.br/api/catalog_system/pub/products/search/{codigo}
-    resp = requests.get(
-        f"{MD_BASE_URL}{codigo}",
-        verify=VERIFY_SSL,
-        timeout=10,
-    )
-    resp.raise_for_status()
+    Agora usa a mesma lógica de filtro do endpoint /md/sku-image-options
+    (via _listar_opcoes_sku_imagem).
+    """
+    try:
+        resp = requests.get(
+            f"{MD_BASE_URL}{codigo}",
+            verify=VERIFY_SSL,
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.RequestException:
+        return None
 
     produtos = resp.json()
-    if not produtos:
+    if not isinstance(produtos, list) or not produtos:
         return None
 
-    sku = escolher_sku(produtos, codigo=codigo, banho=banho, pedra=pedra)
-    if not sku:
+    opcoes = _listar_opcoes_sku_imagem(produtos, codigo, banho, pedra)
+    if not opcoes:
         return None
 
-    item = sku["item"]
-    image_url = escolher_melhor_imagem(item)
-    return image_url
+    # devolve só a URL da primeira opção encontrada
+    return opcoes[0]["image_url"]
 
 
 # ==============================================================
@@ -213,7 +279,6 @@ def enriquecer_produto(prod: Dict[str, Any]) -> Dict[str, Any]:
             preco_lista = offer.get("ListPrice")
             preco_sem_desc = offer.get("PriceWithoutDiscount")
 
-            # Desconto percentual, se houver preço de lista > 0
             try:
                 if preco is not None and preco_lista and preco_lista > 0:
                     percentual_desconto = (1 - (preco / preco_lista)) * 100
@@ -229,7 +294,6 @@ def enriquecer_produto(prod: Dict[str, Any]) -> Dict[str, Any]:
         "percentual_desconto": percentual_desconto,
     }
 
-    # Anexa tudo direto no produto
     prod["colecao_principal"] = colecao
     prod["imagem_principal"] = imagem
     prod["preco"] = preco
@@ -256,12 +320,6 @@ def search_md(
         description="Filtrar por productId específico (opcional)",
     ),
 ):
-    """
-    Proxy simples para a API de produtos da Maria Dolores.
-    - Você pode buscar por ft= alguma coisa
-    - Ou por productId, se quiser algo mais específico
-    """
-
     params: Dict[str, Any] = {}
 
     if ft:
@@ -294,25 +352,18 @@ def search_md(
 
     dados = resp.json()
 
-    # A API retorna uma lista de produtos
     if isinstance(dados, list):
         dados = [enriquecer_produto(p) for p in dados]
     else:
-        # Só por segurança, se algum dia vier objeto único
         dados = enriquecer_produto(dados)
 
     return JSONResponse(content=dados)
+
 
 @app.get("/image-proxy")
 def image_proxy(
     url: str = Query(..., description="URL absoluta da imagem na VTEX"),
 ):
-    """
-    Proxy de imagem:
-    - O cliente (Base44, navegador, etc.) chama /image-proxy?url=<link-da-vtex>
-    - O backend baixa a imagem da VTEX e devolve o binário.
-    - Isso evita problemas de CORS, porque o browser fala só com o seu backend.
-    """
     try:
         r = requests.get(url, stream=True, timeout=20, verify=VERIFY_SSL)
         r.raise_for_status()
@@ -335,14 +386,23 @@ def image_proxy(
     return StreamingResponse(r.raw, media_type=content_type)
 
 
-
-
 @app.get("/md/sku-image-options")
 def sku_image_options(
-    codigo: str = Query(..., description="Código base, ex: MD2116"),
+    codigo: str = Query(..., description="Código base, ex: 'MD2116' ou 'MD2116.FO.907'"),
     banho: Optional[str] = Query(None, description="Banho, pode ser parcial, ex: 'ouro'"),
     pedra: Optional[str] = Query(None, description="Pedra, pode ser parcial, ex: 'ágata'"),
 ):
+    """
+    Retorna as combinações possíveis de (código / banho / pedra) para um determinado código base,
+    já com:
+      - imagem (VTEX e proxied)
+      - colecao_principal
+      - preços (preco, preco_lista, preco_sem_desconto, percentual_desconto)
+      - link do produto
+
+    Esse endpoint é o "resumido" para uso no Base44 / frontend.
+    """
+
     # 1) chama VTEX
     try:
         resp = requests.get(
@@ -358,6 +418,7 @@ def sku_image_options(
     if not isinstance(produtos, list) or not produtos:
         raise HTTPException(status_code=404, detail="Nenhum produto encontrado")
 
+    # normalizações de busca
     codigo_norm = normalizar_texto(codigo)
     banho_norm = normalizar_texto(banho) if banho else ""
     pedra_norm = normalizar_texto(pedra) if pedra else ""
@@ -365,10 +426,13 @@ def sku_image_options(
     opcoes = []
 
     for prod in produtos:
+        # 🔹 já enriquecemos aqui (coleção, preços, imagem_principal, etc.)
+        prod = enriquecer_produto(prod)
+
         prod_ref = prod.get("productReference") or prod.get("productReferenceCode") or ""
         prod_ref_norm = normalizar_texto(prod_ref)
 
-        # filtro básico por código (começando com MD2116, etc.)
+        # filtro básico por código (igual se vier com ponto, ou começa com se vier só MD2116)
         if "." in codigo_norm:
             if prod_ref_norm != codigo_norm:
                 continue
@@ -398,19 +462,33 @@ def sku_image_options(
             if not image_url:
                 continue
 
-            # 🔹 monta a URL proxied usando o próprio backend
+            # monta a URL proxied usando o próprio backend
             proxied_path = f"/image-proxy?url={quote(image_url, safe='')}"
-            # Se quiser já devolver absoluta, pode fazer:
-            # backend_base = "http://127.0.0.1:8000"
-            # proxied_url = backend_base + proxied_path
-            proxied_url = proxied_path
+            proxied_url = proxied_path  # no front você prefixa com o host do backend
 
+            # 🔹 aqui montamos o "dicionário resumido" para cada opção
             opcoes.append({
-                "codigo": prod_ref,
+                "productId": prod.get("productId"),
+                "codigo_completo": prod_ref,  # ex: MD2116.FO.970
+                "codigo_busca": codigo,        # o que o usuário mandou
                 "banho": banho_label,
                 "pedra": pedra_label,
-                "image_url": image_url,      # VTEX direto
-                "proxied_url": proxied_url,  # passando pelo seu backend
+
+                # infos de produto / coleção
+                "nome": prod.get("productName"),
+                "colecao_principal": prod.get("colecao_principal"),
+                "link": prod.get("link"),
+
+                # preços já enriquecidos
+                "preco": prod.get("preco"),
+                "preco_lista": prod.get("preco_lista"),
+                "preco_sem_desconto": prod.get("preco_sem_desconto"),
+                "percentual_desconto": prod.get("percentual_desconto"),
+
+                # imagens
+                "imagem_principal": prod.get("imagem_principal"),  # do enriquecimento
+                "image_url": image_url,        # desse SKU específico
+                "proxied_url": proxied_url,    # passando pelo seu backend
             })
 
     if not opcoes:
@@ -420,5 +498,4 @@ def sku_image_options(
         )
 
     return opcoes
-
 
